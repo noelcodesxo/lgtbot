@@ -11,6 +11,7 @@ import {
   getDueExpiringMessages,
   removeExpiringMessage,
   saveExpiringMessage,
+  type DueCursor,
   type ExpiringMessage,
 } from './db/expiring-messages';
 import { logger } from './logger';
@@ -188,13 +189,18 @@ export async function deleteDueMessages({
   remove = removeExpiringMessage,
   deleteMessage,
   now = new Date(),
+  after,
 }: {
-  due?: (now: Date) => ExpiringMessage[];
+  due?: (now: Date, after?: DueCursor) => ExpiringMessage[];
   remove?: (messageId: string) => void;
   deleteMessage: (message: ExpiringMessage) => Promise<void>;
   now?: Date;
-}) {
-  for (const message of due(now)) {
+  after?: DueCursor;
+}): Promise<DueCursor | undefined> {
+  let messages = due(now, after);
+  if (messages.length === 0 && after) messages = due(now);
+
+  for (const message of messages) {
     try {
       await deleteMessage(message);
       remove(message.messageId);
@@ -209,15 +215,22 @@ export async function deleteDueMessages({
       }
     }
   }
+
+  const last = messages.at(-1);
+  return last
+    ? { expiresAt: last.expiresAt, messageId: last.messageId }
+    : undefined;
 }
 
 export function startExpiringMessageWorker(client: Client) {
   let running = false;
+  let after: DueCursor | undefined;
   const run = async () => {
     if (running) return;
     running = true;
     try {
-      await deleteDueMessages({
+      after = await deleteDueMessages({
+        after,
         deleteMessage: async (message) => {
           await client.rest.delete(
             Routes.channelMessage(message.channelId, message.messageId)

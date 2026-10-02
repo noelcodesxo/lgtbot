@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { db } from '../db/index';
 import { expiringMessages } from '../db/schema';
 import {
@@ -11,6 +11,7 @@ import {
   getExpiration,
   sendAndSchedule,
 } from '../expiring-messages';
+import { logger } from '../logger';
 
 const now = new Date('2026-10-02T12:00:00Z');
 
@@ -124,5 +125,53 @@ describe('expiring messages', () => {
     expect(getDueExpiringMessages(now)).toHaveLength(0);
     expect(getDueExpiringMessages(later)).toHaveLength(1);
     removeExpiringMessage('message-4');
+  });
+
+  test('reaches newer due rows after 100 persistent failures, then wraps to retry', async () => {
+    for (let index = 0; index < 150; index++) {
+      saveExpiringMessage({
+        messageId: `message-${String(index).padStart(3, '0')}`,
+        guildId: 'guild-1',
+        channelId: 'channel-1',
+        authorId: 'user-1',
+        expiresAt: now,
+      });
+    }
+
+    const attempted: string[] = [];
+    const log = spyOn(logger, 'error').mockImplementation(() => logger);
+    try {
+      const deleteMessage = async (message: { messageId: string }) => {
+        attempted.push(message.messageId);
+        if (message.messageId < 'message-100') {
+          throw new Error('persistent permission failure');
+        }
+      };
+      const firstCursor = await deleteDueMessages({ now, deleteMessage });
+      expect(attempted).toHaveLength(100);
+      expect(firstCursor?.messageId).toBe('message-099');
+
+      const secondCursor = await deleteDueMessages({
+        now,
+        after: firstCursor,
+        deleteMessage,
+      });
+      expect(attempted.slice(100)).toHaveLength(50);
+      expect(attempted.at(-1)).toBe('message-149');
+      expect(secondCursor?.messageId).toBe('message-149');
+      expect(getDueExpiringMessages(now)).toHaveLength(100);
+
+      await deleteDueMessages({
+        now,
+        after: secondCursor,
+        deleteMessage: async (message) => {
+          attempted.push(message.messageId);
+        },
+      });
+      expect(attempted.slice(150)).toHaveLength(100);
+      expect(getDueExpiringMessages(now)).toHaveLength(0);
+    } finally {
+      log.mockRestore();
+    }
   });
 });
