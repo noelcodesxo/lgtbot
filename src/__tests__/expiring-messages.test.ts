@@ -14,6 +14,7 @@ import {
 import {
   deleteDueMessages,
   getExpiration,
+  getExpiringMessageCommand,
   handleExpiringMessageCommand,
   sendAndSchedule,
   unconfirmedMessageReply,
@@ -156,7 +157,21 @@ describe('expiring messages', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  test('only supports the three advertised durations', () => {
+  test('offers a 30-second test choice and schedules it for exactly 30 seconds', () => {
+    const durationOption = getExpiringMessageCommand()
+      .toJSON()
+      .options?.find((option) => option.name === 'duration');
+    expect(
+      durationOption && 'choices' in durationOption
+        ? durationOption.choices?.map((choice) => [choice.name, choice.value])
+        : []
+    ).toContainEqual(['After 30 seconds (test)', '30-seconds']);
+    expect(getExpiration('30-seconds', now)?.getTime()).toBe(
+      now.getTime() + 30 * 1000
+    );
+  });
+
+  test('supports the other advertised durations', () => {
     expect(getExpiration('hour', now)?.getTime()).toBe(
       now.getTime() + 60 * 60 * 1000
     );
