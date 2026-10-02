@@ -104,7 +104,7 @@ export async function sendAndSchedule({
 export async function handleExpiringMessageCommand(
   interaction: ChatInputCommandInteraction
 ) {
-  if (!interaction.inGuild() || !interaction.guild || !interaction.channel) {
+  if (!interaction.guildId || !interaction.channelId) {
     await interaction.reply({
       content: 'This command only works in a server text channel.',
       ephemeral: true,
@@ -112,21 +112,44 @@ export async function handleExpiringMessageCommand(
     return;
   }
 
-  const channel = interaction.channel;
-  const me = interaction.guild.members.me;
-  const permissions = me && channel.permissionsFor(me);
+  await interaction.deferReply({ ephemeral: true });
+  const guildId = interaction.guildId;
+  const channelId = interaction.channelId;
+  let channel;
+  try {
+    channel = await interaction.client.channels.fetch(channelId);
+  } catch {
+    await interaction.editReply(
+      'I could not access this server channel. Make sure the bot is installed in this server and can view it.'
+    );
+    return;
+  }
+
   if (
+    !channel ||
+    !('guildId' in channel) ||
+    channel.guildId !== guildId ||
     !channel.isTextBased() ||
-    !channel.isSendable() ||
-    !permissions?.has([
+    !channel.isSendable()
+  ) {
+    await interaction.editReply(
+      'I could not access this server text channel. Make sure the bot is installed in this server and can view it.'
+    );
+    return;
+  }
+
+  const sendPermission = channel.isThread()
+    ? PermissionFlagsBits.SendMessagesInThreads
+    : PermissionFlagsBits.SendMessages;
+  if (
+    !interaction.appPermissions?.has([
       PermissionFlagsBits.ViewChannel,
-      PermissionFlagsBits.SendMessages,
+      sendPermission,
     ])
   ) {
-    await interaction.reply({
-      content: 'I need permission to view and send messages in this channel.',
-      ephemeral: true,
-    });
+    await interaction.editReply(
+      'I need permission to view and send messages in this channel.'
+    );
     return;
   }
 
@@ -134,17 +157,12 @@ export async function handleExpiringMessageCommand(
   const message = interaction.options.getString('message', true);
   const expiresAt = getExpiration(duration);
   if (!expiresAt || !message.trim() || message.length > 1700) {
-    await interaction.reply({
-      content:
-        'Choose 1 hour, 1 day, or 1 week and enter a message of up to 1700 characters.',
-      ephemeral: true,
-    });
+    await interaction.editReply(
+      'Choose 1 hour, 1 day, or 1 week and enter a message of up to 1700 characters.'
+    );
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
-  const guildId = interaction.guildId!;
-  const channelId = channel.id;
   const result = await sendAndSchedule({
     send: async () => {
       const sent = await channel.send({

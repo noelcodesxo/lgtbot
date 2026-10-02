@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import {
+  PermissionFlagsBits,
+  PermissionsBitField,
+  type ChatInputCommandInteraction,
+} from 'discord.js';
 import { db } from '../db/index';
 import { expiringMessages } from '../db/schema';
 import {
@@ -9,6 +14,7 @@ import {
 import {
   deleteDueMessages,
   getExpiration,
+  handleExpiringMessageCommand,
   sendAndSchedule,
   unconfirmedMessageReply,
   untrackedMessageReply,
@@ -19,6 +25,119 @@ const now = new Date('2026-10-02T12:00:00Z');
 
 describe('expiring messages', () => {
   beforeEach(() => db.delete(expiringMessages).run());
+
+  function makeInteraction({
+    guildId = 'guild-1',
+    channelId = 'channel-1',
+    resolvedGuildId = 'guild-1',
+    permissions = new PermissionsBitField([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+    ]),
+    fetchFails = false,
+    isThread = false,
+  }: {
+    guildId?: string | null;
+    channelId?: string | null;
+    resolvedGuildId?: string;
+    permissions?: PermissionsBitField | null;
+    fetchFails?: boolean;
+    isThread?: boolean;
+  } = {}) {
+    const send = mock(
+      async (_payload: {
+        content: string;
+        allowedMentions: { parse: string[] };
+      }) => ({ id: 'posted-1' })
+    );
+    const fetch = mock(async (_channelId: string) => {
+      if (fetchFails) throw new Error('missing access');
+      return {
+        guildId: resolvedGuildId,
+        isTextBased: () => true,
+        isSendable: () => true,
+        isThread: () => isThread,
+        send,
+      };
+    });
+    const reply = mock(async (_payload: { content: string }) => undefined);
+    const deferReply = mock(
+      async (_payload: { ephemeral: boolean }) => undefined
+    );
+    const editReply = mock(async (_content: string) => undefined);
+    const interaction = {
+      guildId,
+      channelId,
+      guild: null,
+      channel: null,
+      appPermissions: permissions,
+      client: { channels: { fetch } },
+      options: {
+        getString: (name: string) =>
+          name === 'duration' ? 'hour' : 'A short test message',
+      },
+      user: { id: 'user-1' },
+      reply,
+      deferReply,
+      editReply,
+    } as unknown as ChatInputCommandInteraction;
+    return { interaction, send, fetch, reply, deferReply, editReply };
+  }
+
+  test('posts from an uncached guild channel and schedules deletion', async () => {
+    const { interaction, send, fetch, deferReply, editReply } =
+      makeInteraction();
+    await handleExpiringMessageCommand(interaction);
+
+    expect(fetch).toHaveBeenCalledWith('channel-1');
+    expect(deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].allowedMentions).toEqual({ parse: [] });
+    expect(editReply.mock.calls[0][0]).toContain('Posted your message');
+    expect(
+      getDueExpiringMessages(new Date(Date.now() + 60 * 60 * 1000))
+    ).toHaveLength(1);
+  });
+
+  test('rejects DMs without fetching a channel', async () => {
+    const { interaction, fetch, reply } = makeInteraction({ guildId: null });
+    await handleExpiringMessageCommand(interaction);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(reply.mock.calls[0][0].content).toContain('server text channel');
+  });
+
+  test('does not post to inaccessible or mismatched channels', async () => {
+    for (const options of [
+      { fetchFails: true },
+      { resolvedGuildId: 'another-guild' },
+    ]) {
+      const { interaction, send, editReply } = makeInteraction(options);
+      await handleExpiringMessageCommand(interaction);
+      expect(send).not.toHaveBeenCalled();
+      expect(editReply.mock.calls[0][0]).toContain('could not access');
+    }
+  });
+
+  test('does not post without the bot channel permissions', async () => {
+    const { interaction, send, editReply } = makeInteraction({
+      permissions: null,
+    });
+    await handleExpiringMessageCommand(interaction);
+    expect(send).not.toHaveBeenCalled();
+    expect(editReply.mock.calls[0][0]).toContain('permission');
+  });
+
+  test('uses thread message permission for a thread', async () => {
+    const { interaction, send } = makeInteraction({
+      isThread: true,
+      permissions: new PermissionsBitField([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessagesInThreads,
+      ]),
+    });
+    await handleExpiringMessageCommand(interaction);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
 
   test('only supports the three advertised durations', () => {
     expect(getExpiration('hour', now)?.getTime()).toBe(
