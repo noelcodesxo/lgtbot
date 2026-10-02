@@ -6,6 +6,7 @@ import {
   PermissionFlagsBits,
   Routes,
   SlashCommandSubcommandBuilder,
+  type Channel,
 } from 'discord.js';
 import {
   getDueExpiringMessages,
@@ -115,14 +116,29 @@ export async function handleExpiringMessageCommand(
   await interaction.deferReply({ ephemeral: true });
   const guildId = interaction.guildId;
   const channelId = interaction.channelId;
-  let channel;
-  try {
-    channel = await interaction.client.channels.fetch(channelId);
-  } catch {
-    await interaction.editReply(
-      'I could not access this server channel. Make sure the bot is installed in this server and can view it.'
-    );
-    return;
+  let channel: Channel | null = interaction.channel;
+  if (!channel) {
+    try {
+      channel = await interaction.client.channels.fetch(channelId, {
+        allowUnknownGuild: true,
+      });
+    } catch (error) {
+      const discordError = error instanceof DiscordAPIError ? error : null;
+      logger.error(
+        {
+          guildId,
+          channelId,
+          code: discordError?.code,
+          status: discordError?.status,
+          errorType: error instanceof Error ? error.name : 'unknown',
+        },
+        'Could not fetch expiring message channel'
+      );
+      await interaction.editReply(
+        `I could not access this server channel. Check that the bot can view it.${discordError ? ` Discord error: ${discordError.code}.` : ''}`
+      );
+      return;
+    }
   }
 
   if (

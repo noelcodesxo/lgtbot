@@ -35,6 +35,8 @@ describe('expiring messages', () => {
       PermissionFlagsBits.SendMessages,
     ]),
     fetchFails = false,
+    fetchReturnsNull = false,
+    cachedChannel = false,
     isThread = false,
   }: {
     guildId?: string | null;
@@ -42,6 +44,8 @@ describe('expiring messages', () => {
     resolvedGuildId?: string;
     permissions?: PermissionsBitField | null;
     fetchFails?: boolean;
+    fetchReturnsNull?: boolean;
+    cachedChannel?: boolean;
     isThread?: boolean;
   } = {}) {
     const send = mock(
@@ -50,15 +54,16 @@ describe('expiring messages', () => {
         allowedMentions: { parse: string[] };
       }) => ({ id: 'posted-1' })
     );
-    const fetch = mock(async (_channelId: string) => {
+    const channel = {
+      guildId: resolvedGuildId,
+      isTextBased: () => true,
+      isSendable: () => true,
+      isThread: () => isThread,
+      send,
+    };
+    const fetch = mock(async (_channelId: string, _options?: object) => {
       if (fetchFails) throw new Error('missing access');
-      return {
-        guildId: resolvedGuildId,
-        isTextBased: () => true,
-        isSendable: () => true,
-        isThread: () => isThread,
-        send,
-      };
+      return fetchReturnsNull ? null : channel;
     });
     const reply = mock(async (_payload: { content: string }) => undefined);
     const deferReply = mock(
@@ -69,7 +74,7 @@ describe('expiring messages', () => {
       guildId,
       channelId,
       guild: null,
-      channel: null,
+      channel: cachedChannel ? channel : null,
       appPermissions: permissions,
       client: { channels: { fetch } },
       options: {
@@ -89,7 +94,9 @@ describe('expiring messages', () => {
       makeInteraction();
     await handleExpiringMessageCommand(interaction);
 
-    expect(fetch).toHaveBeenCalledWith('channel-1');
+    expect(fetch).toHaveBeenCalledWith('channel-1', {
+      allowUnknownGuild: true,
+    });
     expect(deferReply).toHaveBeenCalledWith({ ephemeral: true });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].allowedMentions).toEqual({ parse: [] });
@@ -97,6 +104,15 @@ describe('expiring messages', () => {
     expect(
       getDueExpiringMessages(new Date(Date.now() + 60 * 60 * 1000))
     ).toHaveLength(1);
+  });
+
+  test('uses a cached guild channel without fetching it', async () => {
+    const { interaction, send, fetch } = makeInteraction({
+      cachedChannel: true,
+    });
+    await handleExpiringMessageCommand(interaction);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   test('rejects DMs without fetching a channel', async () => {
@@ -109,6 +125,7 @@ describe('expiring messages', () => {
   test('does not post to inaccessible or mismatched channels', async () => {
     for (const options of [
       { fetchFails: true },
+      { fetchReturnsNull: true },
       { resolvedGuildId: 'another-guild' },
     ]) {
       const { interaction, send, editReply } = makeInteraction(options);
