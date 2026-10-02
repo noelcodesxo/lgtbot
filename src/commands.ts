@@ -4,6 +4,7 @@ import { getKudosCommands } from './kudos';
 import { getBookClubPicksCommands } from './book-club-picks';
 import { getTwitchCommands } from './twitch';
 import { getGoalsCommands } from './goals';
+import { getExpiringMessageCommand } from './expiring-messages';
 
 const lgtCommand = new SlashCommandBuilder()
   .setName('lgt')
@@ -27,7 +28,13 @@ const commands = [
       return group;
     })
     .addSubcommandGroup(getTwitchCommands())
-    .addSubcommandGroup(getGoalsCommands()),
+    .addSubcommandGroup(getGoalsCommands())
+    .addSubcommandGroup((group) =>
+      group
+        .setName('message')
+        .setDescription('Messages that disappear later')
+        .addSubcommand(getExpiringMessageCommand())
+    ),
 ];
 
 export async function registerCommands() {
