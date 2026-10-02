@@ -10,6 +10,8 @@ import {
   deleteDueMessages,
   getExpiration,
   sendAndSchedule,
+  unconfirmedMessageReply,
+  untrackedMessageReply,
 } from '../expiring-messages';
 import { logger } from '../logger';
 
@@ -72,6 +74,23 @@ describe('expiring messages', () => {
     });
     expect(result).toEqual({ status: 'untracked', messageId: 'message-2' });
     expect(attemptedDelete).toBe(true);
+  });
+
+  test('failure replies direct members to moderators for bot message removal', () => {
+    const untracked = untrackedMessageReply({
+      guildId: 'guild-1',
+      channelId: 'channel-1',
+      messageId: 'message-2',
+    });
+    expect(untracked).toContain('automatic deletion was NOT scheduled');
+    expect(untracked).toContain('moderator or admin');
+    expect(untracked).toContain(
+      'https://discord.com/channels/guild-1/channel-1/message-2'
+    );
+    expect(unconfirmedMessageReply).toContain(
+      'If it appears, automatic deletion was NOT scheduled'
+    );
+    expect(unconfirmedMessageReply).toContain('moderator or admin');
   });
 
   test('removes a posted message when scheduling fails', async () => {

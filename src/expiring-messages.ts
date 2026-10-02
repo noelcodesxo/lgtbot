@@ -57,6 +57,21 @@ type SendResult =
   | { status: 'save_failed' }
   | { status: 'untracked'; messageId: string };
 
+export function untrackedMessageReply({
+  guildId,
+  channelId,
+  messageId,
+}: {
+  guildId: string;
+  channelId: string;
+  messageId: string;
+}) {
+  return `Your message was posted, but automatic deletion was NOT scheduled. Ask a moderator or admin to remove this bot message: https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+}
+
+export const unconfirmedMessageReply =
+  'I could not confirm whether your message was posted. Check this channel. If it appears, automatic deletion was NOT scheduled; ask a moderator or admin to remove the bot message.';
+
 export async function sendAndSchedule({
   send,
   save,
@@ -162,7 +177,11 @@ export async function handleExpiringMessageCommand(
       'URGENT: expiring message was posted but could not be tracked or removed'
     );
     await interaction.editReply(
-      `Your message was posted, but automatic deletion was NOT scheduled. Please delete it manually now: https://discord.com/channels/${guildId}/${channelId}/${result.messageId}`
+      untrackedMessageReply({
+        guildId,
+        channelId,
+        messageId: result.messageId,
+      })
     );
   } else {
     logger.error(
@@ -171,7 +190,7 @@ export async function handleExpiringMessageCommand(
     );
     await interaction.editReply(
       result.status === 'send_failed'
-        ? 'I could not confirm that your message was posted. Check this channel, and delete it manually if it appears.'
+        ? unconfirmedMessageReply
         : 'I could not schedule deletion, so I removed the posted message. Please try again later.'
     );
   }
