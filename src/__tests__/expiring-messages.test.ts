@@ -24,7 +24,6 @@ import {
   scheduleSuccessConfirmationDismissal,
   sendAndSchedule,
   unconfirmedMessageReply,
-  untrackedMessageReply,
 } from '../expiring-messages';
 import { logger } from '../logger';
 
@@ -271,7 +270,7 @@ describe('expiring messages', () => {
         throw new Error('should not be called');
       },
     });
-    expect(result).toEqual({ status: 'scheduled', messageId: 'message-1' });
+    expect(result).toBe('scheduled');
     expect(getDueExpiringMessages(now)).toEqual([
       {
         messageId: 'message-1',
@@ -283,52 +282,67 @@ describe('expiring messages', () => {
     ]);
   });
 
-  test('reports an untracked post if both save and compensating delete fail', async () => {
-    let attemptedDelete = false;
+  test('returns a failure when posting fails without trying to save', async () => {
+    const save = mock(() => undefined);
     const result = await sendAndSchedule({
-      send: async () => 'message-2',
-      save: () => {
-        throw new Error('database unavailable');
-      },
-      compensate: async () => {
-        attemptedDelete = true;
+      send: async () => {
         throw new Error('Discord unavailable');
       },
+      save,
+      compensate: async () => undefined,
     });
-    expect(result).toEqual({ status: 'untracked', messageId: 'message-2' });
-    expect(attemptedDelete).toBe(true);
+    expect(result).toBe('send_failed');
+    expect(save).not.toHaveBeenCalled();
   });
 
-  test('failure replies direct members to moderators for bot message removal', () => {
-    const untracked = untrackedMessageReply({
-      guildId: 'guild-1',
-      channelId: 'channel-1',
-      messageId: 'message-2',
-    });
-    expect(untracked).toContain('automatic deletion was NOT scheduled');
-    expect(untracked).toContain('moderator or admin');
-    expect(untracked).toContain(
-      'https://discord.com/channels/guild-1/channel-1/message-2'
-    );
-    expect(unconfirmedMessageReply).toContain(
-      'If it appears, automatic deletion was NOT scheduled'
-    );
+  test('reports failure and logs if saving and cleanup both fail', async () => {
+    let attemptedDelete = false;
+    const log = spyOn(logger, 'error').mockImplementation(() => logger);
+    try {
+      const result = await sendAndSchedule({
+        send: async () => 'message-2',
+        save: () => {
+          throw new Error('database unavailable');
+        },
+        compensate: async () => {
+          attemptedDelete = true;
+          throw new Error('Discord unavailable');
+        },
+      });
+      expect(result).toBe('send_failed');
+      expect(attemptedDelete).toBe(true);
+      expect(log.mock.calls.at(-1)?.[1]).toContain('URGENT');
+      expect(log.mock.calls.at(-1)?.[0]).toMatchObject({
+        messageId: 'message-2',
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('failure reply tells members to check for a bot message', () => {
+    expect(unconfirmedMessageReply).toContain('Check this channel');
     expect(unconfirmedMessageReply).toContain('moderator or admin');
   });
 
   test('removes a posted message when scheduling fails', async () => {
     const deleted: string[] = [];
-    const result = await sendAndSchedule({
-      send: async () => 'message-2',
-      save: () => {
-        throw new Error('database unavailable');
-      },
-      compensate: async (messageId) => {
-        deleted.push(messageId);
-      },
-    });
-    expect(result).toEqual({ status: 'save_failed' });
-    expect(deleted).toEqual(['message-2']);
+    const log = spyOn(logger, 'error').mockImplementation(() => logger);
+    try {
+      const result = await sendAndSchedule({
+        send: async () => 'message-2',
+        save: () => {
+          throw new Error('database unavailable');
+        },
+        compensate: async (messageId) => {
+          deleted.push(messageId);
+        },
+      });
+      expect(result).toBe('send_failed');
+      expect(deleted).toEqual(['message-2']);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   test('removes a due row only after deletion succeeds and retries failures', async () => {
