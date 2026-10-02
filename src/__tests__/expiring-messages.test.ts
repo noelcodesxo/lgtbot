@@ -1,3 +1,4 @@
+import { setTimeout } from 'node:timers';
 import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
   PermissionFlagsBits,
@@ -16,6 +17,7 @@ import {
   getExpiration,
   getExpiringMessageCommand,
   handleExpiringMessageCommand,
+  scheduleSuccessConfirmationDismissal,
   sendAndSchedule,
   unconfirmedMessageReply,
   untrackedMessageReply,
@@ -71,6 +73,7 @@ describe('expiring messages', () => {
       async (_payload: { ephemeral: boolean }) => undefined
     );
     const editReply = mock(async (_content: string) => undefined);
+    const deleteReply = mock(async () => undefined);
     const interaction = {
       guildId,
       channelId,
@@ -86,14 +89,24 @@ describe('expiring messages', () => {
       reply,
       deferReply,
       editReply,
+      deleteReply,
     } as unknown as ChatInputCommandInteraction;
-    return { interaction, send, fetch, reply, deferReply, editReply };
+    return {
+      interaction,
+      send,
+      fetch,
+      reply,
+      deferReply,
+      editReply,
+      deleteReply,
+    };
   }
 
   test('posts from an uncached guild channel and schedules deletion', async () => {
     const { interaction, send, fetch, deferReply, editReply } =
       makeInteraction();
-    await handleExpiringMessageCommand(interaction);
+    const dismiss = mock((_interaction: ChatInputCommandInteraction) => {});
+    await handleExpiringMessageCommand(interaction, dismiss);
 
     expect(fetch).toHaveBeenCalledWith('channel-1', {
       allowUnknownGuild: true,
@@ -102,9 +115,32 @@ describe('expiring messages', () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].allowedMentions).toEqual({ parse: [] });
     expect(editReply.mock.calls[0][0]).toContain('Posted your message');
+    expect(editReply.mock.calls[0][0]).not.toContain('<t:');
+    expect(editReply.mock.calls[0][0]).toContain(
+      'Others may still see notifications or save a copy'
+    );
+    expect(dismiss).toHaveBeenCalledWith(interaction);
     expect(
       getDueExpiringMessages(new Date(Date.now() + 60 * 60 * 1000))
     ).toHaveLength(1);
+  });
+
+  test('dismisses a successful confirmation after ten seconds', async () => {
+    const { interaction, deleteReply } = makeInteraction();
+    let runDismissal: (() => void) | undefined;
+    const unref = mock(() => undefined);
+    const schedule = mock((callback: () => void, _delay: number) => {
+      runDismissal = callback;
+      return { unref } as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    scheduleSuccessConfirmationDismissal(interaction, schedule);
+    expect(schedule.mock.calls[0][1]).toBe(10 * 1000);
+    expect(unref).toHaveBeenCalledTimes(1);
+    expect(deleteReply).not.toHaveBeenCalled();
+    runDismissal?.();
+    await Promise.resolve();
+    expect(deleteReply).toHaveBeenCalledTimes(1);
   });
 
   test('uses a cached guild channel without fetching it', async () => {
@@ -124,16 +160,18 @@ describe('expiring messages', () => {
   });
 
   test('does not post to inaccessible or mismatched channels', async () => {
+    const dismiss = mock((_interaction: ChatInputCommandInteraction) => {});
     for (const options of [
       { fetchFails: true },
       { fetchReturnsNull: true },
       { resolvedGuildId: 'another-guild' },
     ]) {
       const { interaction, send, editReply } = makeInteraction(options);
-      await handleExpiringMessageCommand(interaction);
+      await handleExpiringMessageCommand(interaction, dismiss);
       expect(send).not.toHaveBeenCalled();
       expect(editReply.mock.calls[0][0]).toContain('could not access');
     }
+    expect(dismiss).not.toHaveBeenCalled();
   });
 
   test('does not post without the bot channel permissions', async () => {

@@ -1,4 +1,4 @@
-import { setInterval } from 'node:timers';
+import { setInterval, setTimeout } from 'node:timers';
 import {
   ChatInputCommandInteraction,
   Client,
@@ -23,6 +23,29 @@ export const durations = {
   day: 24 * 60 * 60 * 1000,
   week: 7 * 24 * 60 * 60 * 1000,
 } as const;
+
+const SUCCESS_CONFIRMATION_MS = 10 * 1000;
+
+export function scheduleSuccessConfirmationDismissal(
+  interaction: ChatInputCommandInteraction,
+  schedule: (
+    callback: () => void,
+    delay: number
+  ) => ReturnType<typeof setTimeout> = setTimeout
+) {
+  const timer = schedule(() => {
+    void interaction.deleteReply().catch((error: unknown) => {
+      logger.warn(
+        {
+          errorType: error instanceof Error ? error.name : 'unknown',
+          code: error instanceof DiscordAPIError ? error.code : undefined,
+        },
+        'Could not dismiss expiring message confirmation'
+      );
+    });
+  }, SUCCESS_CONFIRMATION_MS);
+  timer.unref();
+}
 
 export function getExpiration(duration: string, now = new Date()): Date | null {
   const milliseconds = durations[duration as keyof typeof durations];
@@ -105,7 +128,8 @@ export async function sendAndSchedule({
 }
 
 export async function handleExpiringMessageCommand(
-  interaction: ChatInputCommandInteraction
+  interaction: ChatInputCommandInteraction,
+  dismissSuccessConfirmation = scheduleSuccessConfirmationDismissal
 ) {
   if (!interaction.guildId || !interaction.channelId) {
     await interaction.reply({
@@ -205,8 +229,9 @@ export async function handleExpiringMessageCommand(
 
   if (result.status === 'scheduled') {
     await interaction.editReply(
-      `Posted your message. I’ll delete it <t:${Math.floor(expiresAt.getTime() / 1000)}:R>. Others may still see notifications or save a copy.`
+      'Posted your message. Automatic deletion is scheduled. This confirmation will disappear shortly. Others may still see notifications or save a copy.'
     );
+    dismissSuccessConfirmation(interaction);
   } else if (result.status === 'untracked') {
     logger.error(
       { guildId, channelId, messageId: result.messageId },
