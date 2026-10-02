@@ -39,10 +39,11 @@ A Discord bot for the Let's Get Technical community that provides community enga
 
 ### 5. Expiring messages
 
-- `/lgt message send duration:<30 seconds|1 hour|1 day|1 week> message:<text>` posts in the current server channel and asks the bot to delete it after the selected time. The 30-second option is for quick testing; while the bot is running, deletion should happen within about 5 seconds after the deadline.
+- `/lgt message send duration:<1 hour|1 day|1 week> message:<text>` posts in the current server channel and asks the bot to delete it after the selected time. While the bot is running, deletion should happen within about a minute after the deadline.
 - The command response is visible only to you and its success confirmation disappears after about 10 seconds while the bot stays online. Failure warnings remain visible. The posted message shows your name and scheduled deletion time. Mentions in your text do not ping people or roles.
 - Deletion depends on the bot staying online and retaining access to the channel; overdue messages are retried after a restart. Other members can still see notifications, screenshots, or copies before deletion.
 - The bot stores message, channel, guild, and author IDs plus the deletion time in SQLite. It does not store the message text in its database.
+- Install LGT Bot in the server with the `bot` and `applications.commands` scopes. Grant it **View Channel** and **Send Messages** in channels where this command is used, or **Send Messages in Threads** in threads. A user-installed app or a commands-only installation can display slash commands but cannot post or later delete these messages as the bot.
 
 ## Technical Stack
 
@@ -161,7 +162,7 @@ All commands are under the `/lgt` prefix with the following structure:
     ├── unsubscribe <username> # Unsubscribe from channel
     └── list                   # List all subscriptions
 └── message
-    └── send <duration> <message> # Post a message deleted after 30 seconds, 1 hour, 1 day, or 1 week
+    └── send <duration> <message> # Post a message deleted after 1 hour, 1 day, or 1 week
 ```
 
 ## License

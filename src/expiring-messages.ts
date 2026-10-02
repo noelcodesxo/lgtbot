@@ -18,7 +18,6 @@ import {
 import { logger } from './logger';
 
 export const durations = {
-  '30-seconds': 30 * 1000,
   hour: 60 * 60 * 1000,
   day: 24 * 60 * 60 * 1000,
   week: 7 * 24 * 60 * 60 * 1000,
@@ -62,7 +61,6 @@ export function getExpiringMessageCommand() {
         .setDescription('When to delete the message')
         .setRequired(true)
         .addChoices(
-          { name: 'After 30 seconds (test)', value: '30-seconds' },
           { name: 'After 1 hour', value: 'hour' },
           { name: 'After 1 day', value: 'day' },
           { name: 'After 1 week', value: 'week' }
@@ -160,6 +158,12 @@ export async function handleExpiringMessageCommand(
         },
         'Could not fetch expiring message channel'
       );
+      if (discordError?.code === 50001) {
+        await interaction.editReply(
+          'Discord error 50001 (Missing Access): Ask a server admin to confirm LGT Bot is installed in this server and can View Channel and Send Messages here (or Send Messages in Threads for a thread).'
+        );
+        return;
+      }
       await interaction.editReply(
         `I could not access this server channel. Check that the bot can view it.${discordError ? ` Discord error: ${discordError.code}.` : ''}`
       );
@@ -200,7 +204,7 @@ export async function handleExpiringMessageCommand(
   const expiresAt = getExpiration(duration);
   if (!expiresAt || !message.trim() || message.length > 1700) {
     await interaction.editReply(
-      'Choose 30 seconds, 1 hour, 1 day, or 1 week and enter a message of up to 1700 characters.'
+      'Choose 1 hour, 1 day, or 1 week and enter a message of up to 1700 characters.'
     );
     return;
   }
@@ -324,5 +328,5 @@ export function startExpiringMessageWorker(client: Client) {
     }
   };
   void run();
-  setInterval(() => void run(), 5 * 1000);
+  setInterval(() => void run(), 60 * 1000);
 }

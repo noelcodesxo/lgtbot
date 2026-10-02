@@ -1,10 +1,14 @@
 import { setTimeout } from 'node:timers';
 import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
+  ApplicationIntegrationType,
+  DiscordAPIError,
+  InteractionContextType,
   PermissionFlagsBits,
   PermissionsBitField,
   type ChatInputCommandInteraction,
 } from 'discord.js';
+import { lgtCommand } from '../commands';
 import { db } from '../db/index';
 import { expiringMessages } from '../db/schema';
 import {
@@ -38,6 +42,7 @@ describe('expiring messages', () => {
       PermissionFlagsBits.SendMessages,
     ]),
     fetchFails = false,
+    fetchError,
     fetchReturnsNull = false,
     cachedChannel = false,
     isThread = false,
@@ -47,6 +52,7 @@ describe('expiring messages', () => {
     resolvedGuildId?: string;
     permissions?: PermissionsBitField | null;
     fetchFails?: boolean;
+    fetchError?: Error;
     fetchReturnsNull?: boolean;
     cachedChannel?: boolean;
     isThread?: boolean;
@@ -65,6 +71,7 @@ describe('expiring messages', () => {
       send,
     };
     const fetch = mock(async (_channelId: string, _options?: object) => {
+      if (fetchError) throw fetchError;
       if (fetchFails) throw new Error('missing access');
       return fetchReturnsNull ? null : channel;
     });
@@ -174,6 +181,31 @@ describe('expiring messages', () => {
     expect(dismiss).not.toHaveBeenCalled();
   });
 
+  test('explains Discord Missing Access and requires a server bot install', async () => {
+    const fetchError = new DiscordAPIError(
+      { code: 50001, message: 'Missing Access' },
+      50001,
+      403,
+      'GET',
+      '/channels/channel-1',
+      { body: undefined, files: undefined }
+    );
+    const { interaction, send, editReply } = makeInteraction({ fetchError });
+    await handleExpiringMessageCommand(interaction);
+    expect(send).not.toHaveBeenCalled();
+    expect(editReply.mock.calls[0][0]).toContain('Discord error 50001');
+    expect(editReply.mock.calls[0][0]).toContain('server admin');
+    expect(editReply.mock.calls[0][0]).toContain('View Channel');
+  });
+
+  test('registers lgt only for server installs in servers', () => {
+    const command = lgtCommand.toJSON();
+    expect(command.integration_types).toEqual([
+      ApplicationIntegrationType.GuildInstall,
+    ]);
+    expect(command.contexts).toEqual([InteractionContextType.Guild]);
+  });
+
   test('does not post without the bot channel permissions', async () => {
     const { interaction, send, editReply } = makeInteraction({
       permissions: null,
@@ -195,7 +227,7 @@ describe('expiring messages', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  test('offers a 30-second test choice and schedules it for exactly 30 seconds', () => {
+  test('offers only the production expiration choices', () => {
     const durationOption = getExpiringMessageCommand()
       .toJSON()
       .options?.find((option) => option.name === 'duration');
@@ -203,13 +235,15 @@ describe('expiring messages', () => {
       durationOption && 'choices' in durationOption
         ? durationOption.choices?.map((choice) => [choice.name, choice.value])
         : []
-    ).toContainEqual(['After 30 seconds (test)', '30-seconds']);
-    expect(getExpiration('30-seconds', now)?.getTime()).toBe(
-      now.getTime() + 30 * 1000
-    );
+    ).toEqual([
+      ['After 1 hour', 'hour'],
+      ['After 1 day', 'day'],
+      ['After 1 week', 'week'],
+    ]);
+    expect(getExpiration('30-seconds', now)).toBeNull();
   });
 
-  test('supports the other advertised durations', () => {
+  test('supports the advertised durations', () => {
     expect(getExpiration('hour', now)?.getTime()).toBe(
       now.getTime() + 60 * 60 * 1000
     );
